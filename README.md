@@ -1,41 +1,30 @@
-# Case study — Junior Software Engineer at mangolab
+# FX conversion tool
 
-Two small tasks, **about two and a half hours in total.** Please do not spend
-your weekend on this. If you run out of time, stop and write down what you would
-have done next — that answer counts too.
+## What it does
 
-Use Claude Code, Cursor, Copilot — whatever you normally use. That is how we work
-every day, and we would rather see you use it well than watch you avoid it. The
-only thing we ask is that you know your own code.
+This FastAPI service exposes one agent-friendly endpoint that converts a positive fiat amount using a validated historical ECB rate from Frankfurter v1. It keeps the caller's requested date separate from the actual rate date, never substitutes a made-up rate, and caches validated rates in the running process.
 
-**Start by clicking "Use this template"** to create your own repository, then
-work there.
+## Setup
 
----
-
-## Part A — build (about 90 minutes)
-
-A small HTTP service — Python + FastAPI preferred, TypeScript is fine — with one
-endpoint an AI agent could call as a tool:
-
-```
-GET /tools/convert?amount=250&from=EUR&to=TRY&date=2026-08-28
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
 ```
 
-It answers using the public [Frankfurter API](https://frankfurter.dev) —
-European Central Bank rates, no API key, no signup.
+## Run
 
-### Three things are fixed, so that we can run every submission the same way
+```bash
+./run.sh
+```
 
-| | |
-|---|---|
-| Upstream URL | from the `FX_UPSTREAM_BASE` environment variable, defaulting to `https://api.frankfurter.dev`. **Nothing may hardcode the real host** — we point this at a fake upstream when reviewing. |
-| Port | from the `PORT` environment variable, default `8080` |
-| Scripts | `./run.sh` starts the service, `./test.sh` runs the tests. Both are in this template, unimplemented. |
+`PORT` controls the listening port (default `8080`). `FX_UPSTREAM_BASE` controls the upstream origin (default `https://api.frankfurter.dev`); a trailing slash is accepted. `run.sh` binds to `0.0.0.0` and leaves upstream configuration to the application.
 
-### The response
+## Example
 
-On success, 200 with:
+```bash
+curl 'http://localhost:8080/tools/convert?amount=250&from=EUR&to=TRY&date=2026-08-28'
+```
 
 ```json
 {
@@ -50,80 +39,37 @@ On success, 200 with:
 }
 ```
 
-`rate_date` is **the date the rate you used actually belongs to.** `asked_date`
-is what the caller asked for. They are not always the same, and that difference
-is the point of this task.
+The shown rate is illustrative; the live value comes from the configured upstream.
 
-On failure, a non-2xx status and:
+## Tests
 
-```json
-{ "error": "<short_machine_code>", "message": "<a sentence a person could read>" }
+```bash
+./test.sh
 ```
 
-List your error codes in your README.
+Tests replace the HTTP transport with a fake upstream and require no network. They remain isolated even when `FX_UPSTREAM_BASE` points to a closed port.
 
-### The part that matters
+## Behavior / edge cases
 
-The caller is a language model talking to a paying customer, so **a wrong number
-is worse than no number.** Decide — and implement — what happens when:
+- `date` is required and must be a valid `YYYY-MM-DD` UTC calendar date. Future dates and dates before the ECB series start (`1999-01-04`) are rejected before any upstream call.
+- The service makes one v1 historical request for the exact date asked. Frankfurter may carry a weekend or holiday back to the prior ECB observation: `asked_date` remains the caller's date and validated upstream `date` becomes `rate_date`. There is no `/latest` fallback.
+- Currency codes are normalized to uppercase and must be exactly three ASCII letters. Equal currencies are rejected. A well-formed but unsupported code or pair returns `rate_unavailable` when the upstream cannot supply it; there is no per-request currencies preflight.
+- Amounts must be finite, greater than zero, and have at most two fractional digits. Input is never silently rounded. Calculation uses `Decimal`, preserves the upstream rate precision, then rounds only the result to two places with `ROUND_HALF_UP`.
+- Timeouts return 504. Transport failures, upstream 5xx responses, non-JSON bodies, invalid schemas, non-positive rates, and impossible rate dates return 502; upstream details are not exposed.
+- Only validated `(from, to, asked_date)` rate/date pairs are cached in memory. The amount is intentionally not part of the key. Failures are not cached, and another date always causes another upstream request.
 
-- the ECB published no rate for the date asked (weekends, holidays);
-- the date is in the future, or before the series starts;
-- the currency code does not exist, or `from` and `to` are the same;
-- the upstream is slow, returns 500, or returns something that is not JSON;
-- `amount` is missing, zero, negative, or has ten decimal places.
+## Error codes
 
-Your endpoint must never invent a rate, and must never present a rate as
-belonging to a date it does not belong to. Note that the upstream itself tells
-you which date its rates are from — read it. If you choose to answer with an
-earlier published rate, the response has to make that visible, because the model
-has to be able to tell the customer which day the number is from.
-
-### Also required
-
-- **Tests that pass with no network at all** — fake the upstream. We run
-  `./test.sh` with `FX_UPSTREAM_BASE` pointing at a closed port.
-- A README of your own we can follow in under a minute: how to run it, how to
-  run the tests, your error codes, and what your endpoint does in each of the
-  cases above.
-- A repeat of the same question should not re-ask the upstream.
-- `NOTES.md`, one page. The skeleton is in this repo.
-
-### Not required, not scored
-
-Auth, a database, a UI, a Dockerfile, CI, deployment, more endpoints. Adding them
-will not help you; a smaller thing done carefully will.
-
----
-
-## Part B — review (about 45 minutes)
-
-`tool.py` in this repository is a working version of the same service, written
-quickly with an AI assistant. It runs. **Review it as if it were going live
-tomorrow for a customer who pays us.**
-
-Fill in `REVIEW.md`, one page:
-
-- what is wrong, and what it does to a **customer** — not to a linter;
-- how you would verify each finding;
-- your findings **ranked**, and which single one you would fix before shipping
-  tonight.
-
-Fewer findings, ranked and explained, beat a long list. If something looks
-suspicious but is actually fine, saying so is worth as much as finding a real
-defect.
-
----
-
-## Submitting
-
-Reply to our email with a link to your repository. Commit in small steps — the
-history is part of what we read. Five days is plenty; if you need more, just say
-so.
-
-Any question about this brief, ask. An unclear requirement is our fault, not a
-test.
-
----
-
-<sub>mangolab — Mango Yazılım Teknolojileri Ltd. Şti. · [mangolab.ai/careers](https://mangolab.ai/careers)</sub>
+| Code | HTTP status | Meaning |
+|---|---:|---|
+| `invalid_request` | 422 | A required query value is missing, malformed, or the date is invalid. |
+| `invalid_amount` | 422 | Amount is non-numeric, non-finite, non-positive, or too precise. |
+| `invalid_currency` | 422 | A currency is not exactly three ASCII letters. |
+| `same_currency` | 422 | Source and target currencies are equal. |
+| `future_date` | 422 | The requested date is after today's UTC date. |
+| `date_before_series` | 422 | The requested date predates `1999-01-04`. |
+| `rate_unavailable` | 422 | The upstream has no requested pair/date rate or returns a 4xx response. |
+| `upstream_timeout` | 504 | The upstream request exceeded the five-second timeout. |
+| `upstream_error` | 502 | The upstream was unreachable or returned a non-2xx/4xx failure. |
+| `upstream_invalid_response` | 502 | The upstream body, schema, rate, or rate date was invalid. |
+| `internal_error` | 500 | An unexpected service error occurred. |
