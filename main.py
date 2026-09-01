@@ -6,10 +6,10 @@ import json
 import logging
 import os
 import re
-from contextlib import asynccontextmanager, localcontext
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
 from typing import Annotated
 
 import httpx
@@ -237,7 +237,7 @@ def create_app(
         logger.exception("Unexpected conversion failure", exc_info=exc)
         return _error_response(500, "internal_error", "An unexpected internal error occurred.")
 
-    @application.get("/tools/convert")
+    @application.get("/tools/convert", response_model=None)
     async def convert(
         request: Request,
         amount: Annotated[str, Query(max_length=100)],
